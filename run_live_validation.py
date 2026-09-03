@@ -1,6 +1,6 @@
 """
-run_live_validation.py - Executes live Test Mode validation across 8 distinct failure cases.
-Generates real Razorpay payment links and populates audit_log.csv.
+run_live_validation.py - Executes live Test Mode validation across 12 distinct failure cases.
+Covers One-Off Payments & Subscription Mandates with real Razorpay Test Mode API & Hash-Chained Audit Logging.
 Razorpay Buildathon Track 3: AI Revenue Recovery Agent
 """
 
@@ -10,10 +10,10 @@ import hmac
 import hashlib
 import json
 import time
-import requests
 from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 from app import app
+from audit import verify_audit_log_integrity
 
 load_dotenv()
 
@@ -21,8 +21,13 @@ SERVER_URL = os.getenv("WEBHOOK_TARGET_URL", "http://localhost:5000/webhook")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
 TEST_CASES = [
+    # ----------------------------------------------------
+    # Category 1: One-Off Payment Failures (TC-01 to TC-08)
+    # ----------------------------------------------------
     {
         "case_id": "TC-01",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Transient UPI Timeout (INR 1,499.00)",
         "expected_action": "RETRY_LINK_NOW",
         "expected_rule": "RULE_HIGH_PROB_IMMEDIATE_RETRY",
@@ -40,6 +45,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-02",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Card Gateway Technical Error (INR 2,999.00)",
         "expected_action": "RETRY_LINK_NOW",
         "expected_rule": "RULE_HIGH_PROB_IMMEDIATE_RETRY",
@@ -57,6 +64,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-03",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Soft Failure - Insufficient Funds (INR 799.00)",
         "expected_action": "RETRY_LINK_DELAYED",
         "expected_rule": "RULE_LOW_PROB_DELAYED_NUDGE",
@@ -74,6 +83,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-04",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Expired Card Instrument (INR 1,200.00)",
         "expected_action": "ESCALATE_HUMAN",
         "expected_rule": "RULE_HARD_DECLINE_COMPLIANCE",
@@ -91,6 +102,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-05",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Compliance Hard Decline - Stolen Card (INR 3,500.00)",
         "expected_action": "ESCALATE_HUMAN",
         "expected_rule": "RULE_HARD_DECLINE_COMPLIANCE",
@@ -108,6 +121,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-06",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Compliance Hard Decline - Fraud Suspected (INR 4,200.00)",
         "expected_action": "ESCALATE_HUMAN",
         "expected_rule": "RULE_HARD_DECLINE_COMPLIANCE",
@@ -125,6 +140,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-07",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "High Value Risk Ceiling (> INR 10,000) (INR 28,500.00)",
         "expected_action": "ESCALATE_HUMAN",
         "expected_rule": "RULE_HIGH_AMOUNT_ESCALATION",
@@ -142,6 +159,8 @@ TEST_CASES = [
     },
     {
         "case_id": "TC-08",
+        "category": "One-Off Payment",
+        "event": "payment.failed",
         "description": "Stopping Rule - Active Cooldown Suppression",
         "expected_action": "STOP",
         "expected_rule": "RULE_COOLDOWN_ACTIVE",
@@ -158,23 +177,125 @@ TEST_CASES = [
             "contact": "+919876543210",
         }
     },
+
+    # ----------------------------------------------------
+    # Category 2: Subscription & Mandate Recoveries (TC-09 to TC-12)
+    # ----------------------------------------------------
+    {
+        "case_id": "TC-09",
+        "category": "Subscription Mandate",
+        "event": "subscription.charged.failed",
+        "description": "Subscription 1st Mandate Failure - Transient (INR 999/mo)",
+        "expected_action": "SCHEDULE_RETRY_DAY_1",
+        "expected_rule": "RULE_SUB_STAGE_1_RETRY",
+        "entity": {
+            "id": f"pay_live_tc09_sub_{int(time.time())}",
+            "amount": 99900,
+            "currency": "INR",
+            "method": "card",
+            "error_code": "BAD_REQUEST_ERROR",
+            "error_reason": "payment_timed_out",
+            "error_description": "Mandate charge timed out on bank switch",
+            "email": "sub.user1@example.com",
+            "contact": "+919876543210",
+        },
+        "subscription": {
+            "id": f"sub_live_001_{int(time.time())}",
+            "plan_id": "plan_monthly_pro",
+        }
+    },
+    {
+        "case_id": "TC-10",
+        "category": "Subscription Mandate",
+        "event": "subscription.charged.failed",
+        "description": "Subscription 2nd Mandate Failure - Insufficient Funds (INR 1,499/mo)",
+        "expected_action": "SCHEDULE_RETRY_DAY_3",
+        "expected_rule": "RULE_SUB_STAGE_2_LIQUIDITY_BUFFER",
+        "entity": {
+            "id": f"pay_live_tc10_sub_{int(time.time())}",
+            "amount": 149900,
+            "currency": "INR",
+            "method": "upi",
+            "error_code": "BAD_REQUEST_ERROR",
+            "error_reason": "insufficient_funds",
+            "error_description": "Mandate auto-debit balance unavailable",
+            "email": "sub.user2@example.com",
+            "contact": "+919876543210",
+        },
+        "subscription": {
+            "id": f"sub_live_002_{int(time.time())}",
+            "plan_id": "plan_annual_growth",
+        },
+        "prior_failures_setup": 1,
+    },
+    {
+        "case_id": "TC-11",
+        "category": "Subscription Mandate",
+        "event": "subscription.charged.failed",
+        "description": "Subscription Expired Mandate Card -> Update Payment Method Link",
+        "expected_action": "SEND_UPDATE_PAYMENT_METHOD_LINK",
+        "expected_rule": "RULE_SUB_INSTRUMENT_UPDATE_REQUIRED",
+        "entity": {
+            "id": f"pay_live_tc11_sub_{int(time.time())}",
+            "amount": 199900,
+            "currency": "INR",
+            "method": "card",
+            "error_code": "BAD_REQUEST_ERROR",
+            "error_reason": "card_expired",
+            "error_description": "Mandate token card expired",
+            "email": "sub.expired@example.com",
+            "contact": "+919876543210",
+        },
+        "subscription": {
+            "id": f"sub_live_003_{int(time.time())}",
+            "plan_id": "plan_premium_tier",
+        }
+    },
+    {
+        "case_id": "TC-12",
+        "category": "Subscription Mandate",
+        "event": "subscription.charged.failed",
+        "description": "Subscription 3+ Mandate Failures -> Cancel/Stop to Prevent Fines",
+        "expected_action": "CANCEL_SUBSCRIPTION_STOP",
+        "expected_rule": "RULE_SUB_MAX_RETRIES_EXCEEDED",
+        "entity": {
+            "id": f"pay_live_tc12_sub_{int(time.time())}",
+            "amount": 99900,
+            "currency": "INR",
+            "method": "card",
+            "error_code": "BAD_REQUEST_ERROR",
+            "error_reason": "insufficient_funds",
+            "error_description": "Repeated 4th failed debit attempt",
+            "email": "sub.churn@example.com",
+            "contact": "+919876543210",
+        },
+        "subscription": {
+            "id": f"sub_live_004_{int(time.time())}",
+            "plan_id": "plan_starter",
+        },
+        "prior_failures_setup": 3,
+    },
 ]
 
 client = TestClient(app)
 
 
-def send_webhook(entity: dict) -> dict:
+def send_webhook(tc: dict) -> dict:
     payload = {
+        "id": f"evt_{int(time.time()*1000)}_{tc['case_id']}",
         "entity": "event",
         "account_id": "acc_live_validator",
-        "event": "payment.failed",
+        "event": tc.get("event", "payment.failed"),
         "contains": ["payment"],
         "payload": {
             "payment": {
-                "entity": entity
+                "entity": tc["entity"]
             }
         },
     }
+
+    if "subscription" in tc:
+        payload["payload"]["subscription"] = {"entity": tc["subscription"]}
 
     raw_bytes = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -183,15 +304,15 @@ def send_webhook(entity: dict) -> dict:
         sig = hmac.new(WEBHOOK_SECRET.encode("utf-8"), raw_bytes, hashlib.sha256).hexdigest()
         headers["X-Razorpay-Signature"] = sig
 
-    # Use TestClient directly to test with real Razorpay SDK in Test Mode
     res = client.post("/webhook", content=raw_bytes, headers=headers)
     return res.json()
 
 
 def run_live_validation():
     print("\n================================================================================")
-    print(" EXECUTING LIVE TEST MODE VALIDATION (8 Distinct Cases)")
-    print(" Executing with real Razorpay Test Mode API & Audit Logging")
+    print(" EXECUTING LIVE TEST MODE VALIDATION (12 Distinct Cases)")
+    print(" Covers: One-Off Payment Failures & Subscription Mandate Retry Sequencing")
+    print(" Real Razorpay Test Mode API + Hash-Chained Audit Trail + LLM Diagnostics")
     print("================================================================================")
 
     results = []
@@ -199,26 +320,33 @@ def run_live_validation():
 
     for tc in TEST_CASES:
         case_id = tc["case_id"]
+        category = tc["category"]
         desc = tc["description"]
         expected_act = tc["expected_action"]
         expected_rule = tc["expected_rule"]
 
-        print(f"\n[{case_id}] {desc}")
+        print(f"\n[{case_id}] ({category}) {desc}")
         print(f"       Expected: {expected_act} via {expected_rule}")
 
         try:
+            # Handle prior failure setups for testing multi-step lifecycle
+            if tc.get("prior_failures_setup"):
+                from features import global_tracker
+                key = tc.get("subscription", {}).get("id") or tc["entity"]["id"]
+                for _ in range(tc["prior_failures_setup"]):
+                    global_tracker.record_failure(key)
+
             if tc.get("is_cooldown_pair"):
-                # Step 1: Send initial failure
-                res1 = send_webhook(tc["entity"])
-                # Step 2: Send immediate duplicate failure for the same transaction ID
+                res1 = send_webhook(tc)
                 time.sleep(0.5)
-                res = send_webhook(tc["entity"])
+                res = send_webhook(tc)
             else:
-                res = send_webhook(tc["entity"])
+                res = send_webhook(tc)
 
             actual_act = res.get("decision")
             actual_rule = res.get("rule")
             link_url = res.get("payment_link")
+            diag = res.get("diagnosis")
 
             is_match = (actual_act == expected_act) and (actual_rule == expected_rule)
             if is_match:
@@ -230,14 +358,17 @@ def run_live_validation():
             print(f"       Result  : {status_str} -> Action: {actual_act} | Rule: {actual_rule}")
             if link_url:
                 print(f"       Razorpay Link Generated: {link_url}")
+            if diag:
+                print(f"       LLM Diagnosis: \"{diag}\"")
 
             results.append({
                 "case_id": case_id,
+                "category": category,
                 "description": desc,
                 "expected_action": expected_act,
                 "actual_action": actual_act,
                 "rule_triggered": actual_rule,
-                "payment_link": link_url or "N/A (Compliant No-Retry / Delayed / Escalated)",
+                "payment_link": link_url or "N/A (Scheduled / Escalated / Suppressed)",
                 "passed": is_match,
             })
 
@@ -248,7 +379,13 @@ def run_live_validation():
 
     print("\n================================================================================")
     print(f" LIVE VALIDATION SUMMARY: {passed}/{len(TEST_CASES)} Cases Verified Compliant & Correct")
-    print(" All decisions and generated links recorded to audit_log.csv")
+    
+    # Audit log verification
+    is_valid, count, err = verify_audit_log_integrity()
+    if is_valid:
+        print(f" Cryptographic Hash Chain: VERIFIED INTACT ({count} tamper-evident rows)")
+    else:
+        print(f" [WARNING] Hash Chain Alert: {err}")
     print("================================================================================\n")
 
 

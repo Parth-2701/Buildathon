@@ -77,17 +77,10 @@ def build_features(
     payment_entity: Dict[str, Any],
     tracker: Optional[TransactionTracker] = None,
     current_time: Optional[float] = None,
+    custom_tracking_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extracts a structured feature dictionary from a Razorpay payment entity dict.
-    
-    Args:
-        payment_entity: Razorpay payment entity dict (from webhook payload)
-        tracker: Optional TransactionTracker instance (defaults to global_tracker)
-        current_time: Optional unix timestamp for deterministic testing
-        
-    Returns:
-        Structured dictionary of features ready for policy evaluation.
     """
     if tracker is None:
         tracker = global_tracker
@@ -96,8 +89,8 @@ def build_features(
 
     txn_id = payment_entity.get("id", "")
     order_id = payment_entity.get("order_id")
-    # Group by order_id if present (since retries may create new payment IDs for same order)
-    tracking_key = order_id if order_id else txn_id
+    # Group by subscription_id / order_id / txn_id
+    tracking_key = custom_tracking_key or order_id or txn_id
 
     # Retrieve prior failures BEFORE recording this new failure
     prior_failures = tracker.get_prior_failures(tracking_key)
