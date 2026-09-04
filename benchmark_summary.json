@@ -1,30 +1,59 @@
 {
-  "dataset_size": 5000,
-  "total_failed_amount_inr": 12310186.71,
-  "baseline": {
-    "recovered_count": 903,
-    "recovery_rate_pct": 18.06,
-    "recovered_amount_inr": 2152662.23,
-    "recovery_value_pct": 17.49,
-    "automated_messages_sent": 5000,
-    "inr_recovered_per_message": 430.53,
-    "non_compliant_actions": 1133,
-    "hazardous_fraud_retries": 779
+  "disclaimer": "Modeled Expected-Value Comparison (Synthetic). Evaluates relative expected value under calibrated domain simulations across 6,500 total events. Live API correctness is verified in run_live_validation.py (18 test-mode cases).",
+  "overall": {
+    "total_at_risk_inr": 32075477.49,
+    "baseline_recovered_inr": 6729634.17,
+    "agent_recovered_inr": 12963516.85,
+    "incremental_recovered_inr": 6233882.68,
+    "overall_revenue_uplift_pct": 92.63,
+    "compliance_violations_prevented": 1133,
+    "hazardous_fraud_retries_prevented": 779
   },
-  "agent": {
-    "recovered_count": 1922,
-    "recovery_rate_pct": 38.44,
-    "recovered_amount_inr": 4317856.23,
-    "recovery_value_pct": 35.08,
-    "automated_messages_sent": 3735,
-    "inr_recovered_per_message": 1156.05,
-    "non_compliant_actions": 0,
-    "hazardous_fraud_retries": 0
-  },
-  "uplift": {
-    "incremental_recovered_inr": 2165194.0,
-    "percentage_revenue_increase": 100.58,
-    "customer_spam_reduced_pct": 25.3,
-    "compliance_violations_prevented": 1133
+  "track_breakdown": {
+    "track_1_payments": {
+      "track": "Track 1: Payment Failures & Subscriptions",
+      "n": 5000,
+      "total_at_risk_inr": 12310186.71,
+      "baseline_recovered_inr": 2478472.86,
+      "baseline_recovered_cnt": 957,
+      "baseline_messages": 5000,
+      "baseline_non_compliant": 1133,
+      "baseline_hazardous": 779,
+      "agent_recovered_inr": 4171440.23,
+      "agent_recovered_cnt": 1862,
+      "agent_messages": 3735,
+      "agent_non_compliant": 0,
+      "agent_hazardous": 0,
+      "uplift_inr": 1692967.37,
+      "uplift_pct": 68.31,
+      "spam_reduction_pct": 25.3
+    },
+    "track_2_abandonment": {
+      "track": "Track 2: Checkout Abandonment",
+      "n": 1000,
+      "total_at_risk_inr": 1526185.07,
+      "baseline_recovered_inr": 159474.04,
+      "baseline_recovered_cnt": 95,
+      "baseline_messages": 1000,
+      "agent_recovered_inr": 345308.78,
+      "agent_recovered_cnt": 228,
+      "agent_messages": 857,
+      "uplift_inr": 185834.74,
+      "uplift_pct": 116.53,
+      "spam_reduction_pct": 14.3
+    },
+    "track_3_receivables": {
+      "track": "Track 3: B2B Receivables",
+      "n": 500,
+      "total_at_risk_inr": 18239105.71,
+      "baseline_recovered_inr": 4091687.27,
+      "baseline_recovered_cnt": 143,
+      "baseline_messages": 500,
+      "agent_recovered_inr": 8446767.84,
+      "agent_recovered_cnt": 272,
+      "agent_messages": 800,
+      "uplift_inr": 4355080.57,
+      "uplift_pct": 106.44
+    }
   }
 }

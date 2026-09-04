@@ -3,182 +3,183 @@
 ### Razorpay Buildathon — Track 3: Autonomous Agents & Workflows
 **Repository:** [https://github.com/Parth-2701/Buildathon.git](https://github.com/Parth-2701/Buildathon.git)
 
-An autonomous, compliance-first AI agent designed to diagnose failed Razorpay payments and subscription mandates, enforce strict regulatory stopping rules, optimize retry timing using calibrated machine learning, provide bounded LLM root-cause diagnostics, and autonomously generate Test Mode Payment Links backed by a tamper-evident cryptographic audit chain.
-
-> [!NOTE]
-> **Scope Boundary:** This system focuses specifically on **one-off payment-failure recovery** and **subscription/mandate retry sequencing**. Checkout abandonment and B2B receivables collection are explicitly out of scope for this build.
+An autonomous, compliance-first AI revenue recovery platform designed to eliminate revenue leaks across the entire transaction lifecycle:
+1. **One-Off Payment Failures & Subscription Mandates:** Real-time webhook ingestion, calibrated ML recovery probability, and NPCI-compliant retry sequencing.
+2. **Checkout Abandonment Recovery:** Drop-off step intent scoring, automated payment link generation, and spam-prevention ceilings.
+3. **B2B Receivables Chaser & Promise-to-Pay Tracker:** Multi-stage dunning ladder (Day+3 Friendly $\rightarrow$ Day+10 Itemized $\rightarrow$ Day+21 Final Notice $\rightarrow$ Day+30 Collections), promise-to-pay hold, and broken-promise acceleration.
+4. **Actionable Human Escalation Triage:** Operational queue and REST endpoints for compliance holds and high-ticket exceptions.
+5. **Tamper-Evident Audit Ledger:** Cryptographic SHA-256 row-by-row hash chain securing every agent action and state transition.
 
 ---
 
-## 1. Problem Chosen & Justification
+## 1. The 3 Revenue Leakage Pillars
 
-- **Chosen Scope:** **Payment-Failure & Subscription-Mandate Recovery** (`payment.failed` / `subscription.charged.failed` $\rightarrow$ diagnose $\rightarrow$ bounded action $\rightarrow$ measured recovery via Razorpay Payment Links & mandate sequencers).
-- **One-Line Justification:** *Failed payments cause immediate, high-intent revenue leakage that can be recovered automatically through intelligent diagnosis, whereas checkout abandonment or receivables collection involve ambiguous intent and third-party friction.*
+| Pillar | Trigger / Surface | Autonomous Agent Strategy | Hard Stopping Rule / Guardrail |
+| :--- | :--- | :--- | :--- |
+| **Pillar 1: Failed Payments & Subscriptions** | `payment.failed`, `subscription.charged.failed` | Calibrated ML predicts soft decline recovery. Instant Razorpay link for transient UPI/card errors. Staged mandate retry (Day 1 $\rightarrow$ 3 $\rightarrow$ 7). | Max 2 one-off retries / 3 mandate retries; 6h cooldown; zero-tolerance hard compliance declines (`stolen_card`, `fraud`); ₹10,000 ceiling. |
+| **Pillar 2: Checkout Abandonment** | Inactivity $>15$ mins on checkout sessions | Intent scoring based on cart step (`payment_method`, `otp` vs `cart`); generates live Razorpay links with personalized copy. | Max 2 nudges per session; 2-hour cooldown; automatic suppression for low-intent carts ($< ₹500$); auto-stop on `order.paid`. |
+| **Pillar 3: B2B Receivables & Invoices** | Overdue B2B invoices past due date | 4-stage dunning ladder (Friendly Nudge $\rightarrow$ Itemized Notice $\rightarrow$ Final Notice $\rightarrow$ Collections Escalation). | Active Promise-to-Pay pauses dunning; $\ge 2$ broken promises routes immediately to human specialist; ₹50,000 high-ticket ceiling. |
 
 ---
 
 ## 2. Architecture & Decision Flow
 
 ```
-Incoming Webhook (`payment.failed` / `subscription.charged.failed`)
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 1. Webhook Receiver & Idempotency Layer                                     │
-│    • Cryptographic HMAC-SHA256 signature verification                       │
-│    • Event-ID deduplication (guarantees exactly-once processing)            │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 2. Feature Builder & State Tracking                                         │
-│    • Extracts amount, error code, payment method, subscription metadata     │
-│    • In-memory `TransactionTracker` (failure history & 6h cooldown state)   │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 3. Two-Tier Policy Engine                                                   │
-│                                                                             │
-│  [TIER 1: Deterministic Compliance & Stopping Guardrails]                   │
-│   • Prior failures >= limit? (2 for one-off / 3 for sub)  ──► STOP          │
-│   • Duplicate action in 6h cooldown window?               ──► STOP          │
-│   • Hard decline (stolen, blocked, fraud)?                ──► ESCALATE      │
-│   • High ticket amount > ₹10,000 ceiling?                 ──► ESCALATE      │
-│                                                                             │
-│  [TIER 2: Calibrated Machine Learning Recovery Model]                       │
-│   • HistGradientBoosting + Isotonic Probability Calibration                 │
-│   • Evaluates monetary elasticity, method affinity, and retry curves        │
-│   • One-Off: P(Recovery) >= 0.40 ──► RETRY_LINK_NOW | < 0.40 ──► DELAYED    │
-│   • Subscription: Staged Mandate Retry (Day 1 ──► Day 3 ──► Day 7)           │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-            ┌──────────────────────────┼──────────────────────────┐
-            ▼                          ▼                          ▼
-┌───────────────────────┐  ┌───────────────────────┐  ┌───────────────────────┐
-│ 4. Action Executor    │  │ 5. LLM Diagnostics    │  │ 6. Tamper-Evident     │
-│ Razorpay Test API:    │  │ Strictly read-only:   │  │    Audit Ledger       │
-│ Generates live links  │  │ Generates root-cause  │  │ SHA-256 hash-chained  │
-│ for retry / mandate   │  │ diagnosis & customer  │  │ row-by-row audit trail│
-│ update                │  │ outreach copy         │  │ in `audit_log.csv`    │
-└───────────────────────┘  └───────────────────────┘  └───────────────────────┘
+   Incoming Webhooks / Cron Sweepers (Payments, Abandoned Carts, Overdue Invoices)
+                                        │
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 1. SQLite WAL Persistence & Webhook Idempotency Layer                                   │
+│    • Cryptographic HMAC-SHA256 signature verification                                  │
+│    • Durable SQLite tables (`transaction_state`, `processed_events`, `checkout_sessions`) │
+│    • Process crashes & restarts preserve cooldowns and failure counters                 │
+└───────────────────────────────────────┬─────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 2. Deterministic Compliance & Stopping Guardrails (Tier 1)                             │
+│    • Hard declines (stolen card, fraud, blocked)?       ──► ESCALATE_HUMAN (Triage)     │
+│    • High financial exposure (> ₹10k txn / > ₹50k inv)? ──► ESCALATE_HUMAN (Triage)     │
+│    • Retry ceiling reached / Cooldown active?           ──► STOP (Outreach suppressed)  │
+│    • Active Promise-to-Pay on file?                     ──► STOP (Dunning paused)       │
+└───────────────────────────────────────┬─────────────────────────────────────────────────┘
+                                        │ (Passed Safety Guardrails)
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ 3. Calibrated ML Probability Model & Multi-Stage State Machines (Tier 2)                │
+│    • HistGradientBoostingClassifier + Isotonic Probability Calibration                  │
+│    • Soft declines: P(Recovery) >= 0.40 ──► RETRY_LINK_NOW | < 0.40 ──► RETRY_DELAYED   │
+│    • Mandates: Stage 1 (T+24h) ──► Stage 2 (T+3d) ──► Stage 3 (T+7d)                    │
+│    • B2B Invoices: Day+3 (Friendly) ──► Day+10 (Itemized) ──► Day+21 (Final Notice)     │
+└───────────────────────────────────────┬─────────────────────────────────────────────────┘
+                                        │
+             ┌──────────────────────────┼──────────────────────────┐
+             ▼                          ▼                          ▼
+┌────────────────────────┐  ┌────────────────────────┐  ┌────────────────────────┐
+│ 4. Action Executor     │  │ 5. Read-Only LLM       │  │ 6. Cryptographic       │
+│ Live Razorpay Test API:│  │ Root-cause diagnostics │  │    Audit Ledger        │
+│ Generates instant      │  │ and personalized       │  │ SHA-256 hash-chained   │
+│ recovery payment links │  │ customer copy; never   │  │ row-by-row audit trail │
+│ (`https://rzp.io/...`) │  │ decides actions        │  │ in `audit_log.csv`     │
+└────────────────────────┘  └────────────────────────┘  └────────────────────────┘
 ```
 
 ---
 
-## 3. Stopping Rules & Compliance Escalation Policy
+## 3. AI Judgment: Strict Separation of Concerns
 
-This system enforces four deterministic guardrails that **cannot be overridden by machine learning or LLMs**:
-
-1. **Webhook Idempotency:** Duplicate webhook deliveries (from Razorpay's at-least-once retry delivery) are deduplicated on `event_id` before any action is executed.
-2. **Max Automated Attempts Ceiling:** Maximum **2 automated attempts** per one-off transaction and **3 mandate attempts** per subscription. Beyond these thresholds, the agent permanently halts (`STOP` / `CANCEL_SUBSCRIPTION_STOP`) to protect merchant standing and customer trust.
-3. **Mandatory 6-Hour Cooldown:** No duplicate recovery action is triggered on the same transaction within a 6-hour window (`RULE_COOLDOWN_ACTIVE`).
-4. **Strict Zero-Tolerance Hard Declines:** Error codes indicating dead or compromised instruments (`stolen_card`, `card_lost_or_stolen`, `card_blocked`, `fraud_suspected`, `risk_check_failed`) are **strictly routed to human review (`ESCALATE_HUMAN`)** with **0 automated customer retries**.
-5. **High-Ticket Risk Ceiling:** Any transaction exceeding **₹10,000** (`AMOUNT_ESCALATION_THRESHOLD`) automatically routes to human concierge support (`ESCALATE_HUMAN`) to eliminate large-value automated retry risk.
-
----
-
-## 4. AI Judgment: Where Rules, ML, and LLM are Each Used
-
-| Component | Technology | Rationale & Architectural Boundary |
+| Component | Technology | Architectural Boundary & Rationale |
 | :--- | :--- | :--- |
-| **Stopping Rules & Rate Limits** | Hard Deterministic Rules | Safety, compliance, and spam prevention must be 100% deterministic and predictable. |
+| **Stopping Rules & Rate Limits** | Hard Deterministic Rules | Safety, compliance, spam prevention, and cooldowns must be 100% deterministic and predictable. |
 | **Fraud & Stolen Instrument Handling** | Hard Deterministic Rules | Regulatory compliance, card network rules, and chargeback prevention permit zero probabilistic error. |
-| **High Amount Escalation** | Hard Deterministic Rules | Financial exposure ceiling cannot rely on model confidence. |
-| **Recovery Probability & Timing** | **Calibrated ML Model** (`HistGradientBoosting` + Isotonic Calibration) | Predicts recovery probability on soft failures based on monetary elasticity, error type, payment method, and prior attempt count. Optimizes between immediate links (`RETRY_LINK_NOW`) and delayed outreach (`RETRY_LINK_DELAYED`). |
-| **Root-Cause Diagnosis & Customer Copy** | **LLM Diagnostics Layer** (`llm_diagnostics.py`) | **Strictly read-only & explanatory.** The LLM *never* selects an action, never alters amounts, and never moves money. It only produces natural language audit explanations and personalized customer copy. |
-| **Tamper-Evident Audit Ledger** | **Cryptographic Hash Chain** (`SHA-256`) | Every audit entry is cryptographically linked to the previous row's hash, making any retroactive modification instantly detectable. |
+| **High Amount Escalation** | Hard Deterministic Rules | Financial exposure ceilings cannot rely on model confidence. |
+| **Recovery Probability & Timing** | **Calibrated ML Model** (`HistGradientBoosting` + Isotonic) | Evaluates non-linear interactions (amount elasticity, error code, payment method, retry decay) to classify recovery likelihood on soft declines. |
+| **Root-Cause Diagnosis & Customer Copy** | **LLM Diagnostics Layer** (`llm_diagnostics.py`) | **Strictly read-only & explanatory.** The LLM *never* selects an action, never alters amounts, and never moves money. It produces natural language internal explanations and personalized customer messaging. |
+| **Actionable Human Triage** | **SQLite Queue + REST API** (`escalation.py`) | Persists escalated items in SQLite with full context, supports outbound notifications (Slack), and exposes operator resolution endpoints. |
+| **Tamper-Evident Audit Ledger** | **Cryptographic Hash Chain** (`SHA-256`) | Every audit entry is cryptographically linked to the previous row's hash (`entry_hash = SHA256(prev_hash + row_data)`), making retroactive tampering mathematically impossible. |
 
 ---
 
-## 5. Synthetic Batch Benchmark Evaluation (N = 5,000)
+## 4. Modeled Expected-Value Comparison (Synthetic)
 
-*Evaluated across 5,000 synthetic failed transactions representing **₹1.23 Crore** in at-risk payments.*
+*Evaluated across 6,500 total events representing **₹1.65 Crore** in at-risk revenue across all three pillars.*
 
-| Metric | 🔴 Naive Industry Baseline *(Blind 24h Retry)* | 🟢 AI Recovery Agent *(Rules + Calibrated ML)* | 🚀 Measured Impact / Uplift |
+| Track / Metric | 🔴 Naive Industry Baseline | 🟢 AI Recovery Agent | 🚀 Measured Impact / Uplift |
 | :--- | :--- | :--- | :--- |
-| **Total Failed Transactions** | 5,000 | 5,000 | — |
-| **Total At-Risk Value** | ₹12,310,186.71 | ₹12,310,186.71 | — |
-| **Transactions Recovered** | 903 (18.06%) | **1,922 (38.44%)** | **+1,019 transactions (+112.8% volume)** |
-| **Total Money Recovered** | ₹2,152,662.23 | **₹4,317,856.23** | **+₹2,165,194.00 (+100.58% Revenue Uplift)** |
-| **Automated Outreach Sent** | 5,000 messages | **3,735 messages** | **-25.3% customer spam reduced** |
-| **Outreach Efficiency** | ₹430.53 / message | **₹1,156.05 / message** | **2.68x ROI per message sent** |
-| **Non-Compliant Actions** | 1,133 violations | **0 (Strictly 0%)** | **1,133 regulatory hazards prevented** |
-| **Hazardous Stolen Card Retries**| 779 retries | **0 (Zero-Tolerance)** | **100% fraud/chargeback protection** |
+| **T1: Failed Payments (N=5,000)** | ₹2,478,472.86 *(Blind 24h Retry)* | **₹4,171,440.23** *(Rules + Calibrated ML)* | **+₹1,692,967.37 (+68.31%)** |
+| ↳ *Customer Spam (Messages)* | 5,000 messages | **3,735 messages** | **-25.3% spam reduced** |
+| ↳ *Compliance Violations Prevented* | 1,133 violations | **0 (Strictly 0%)** | **1,133 regulatory hazards prevented** |
+| **T2: Checkout Abandonment (N=1,000)**| ₹159,474.04 *(Blind Spam)* | **₹345,308.78** *(Intent-Weighted)* | **+₹185,834.74 (+116.53%)** |
+| ↳ *Cart Spam Suppressed* | 1,000 messages | **857 messages** | **-14.3% cart spam reduced** |
+| **T3: B2B Receivables (N=500)** | ₹4,091,687.27 *(Static Day 30 Notice)* | **₹8,446,767.84** *(4-Stage Ladder + PTP)* | **+₹4,355,080.57 (+106.44%)** |
+| **TOTAL REVENUE RECOVERED** | **₹6,729,634.17** | **₹12,963,516.85** | **+₹6,233,882.68 (+92.63% Total Uplift)** |
 
-### Model Performance Metrics
-- **Model Architecture:** `HistGradientBoostingClassifier` + `CalibratedClassifierCV` (Isotonic Regression)
-- **ROC-AUC Score:** **`0.7574`** *(Validated on 80/20 train/test split)*
-- **Brier Score Loss:** **`0.1921`** *(High probability calibration accuracy)*
+> [!NOTE]
+> **Methodology Disclaimer:** This evaluation uses domain-grounded synthetic transaction distributions with calibrated recovery probability models. It measures relative expected value under identical simulated conditions, not a production A/B test. Live API correctness is separately verified below via `run_live_validation.py` across 18 real Razorpay Test Mode cases.
+
+### Model Calibration Metrics
+- **Algorithm:** `HistGradientBoostingClassifier` with `CalibratedClassifierCV` (Isotonic Regression)
+- **ROC-AUC Score:** **`0.7574`** *(80/20 train/test split)*
+- **Brier Score Loss:** **`0.1921`** *(True probabilistic alignment)*
 
 ---
 
-## 6. Live Test Mode Demo Evidence (12 Verified Cases)
+## 5. Live Test Mode Demo Evidence (18 Verified Cases)
 
-*Executed against live Razorpay Test Mode API and permanently recorded in [`audit_log.csv`](audit_log.csv).*
+*Executed against live Razorpay Test Mode API endpoints and permanently recorded in the cryptographic [`audit_log.csv`](audit_log.csv).*
 
-| Case ID | Category | Test Scenario | Decision & Rule Fired | Live Razorpay Payment Link Generated | Status |
+| Case ID | Track | Test Scenario | Decision & Rule Triggered | Live Razorpay Payment Link Generated | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **TC-01** | One-Off | Transient UPI Timeout (₹1,499) | `RETRY_LINK_NOW` (`RULE_HIGH_PROB_IMMEDIATE_RETRY`) | [https://rzp.io/rzp/WhPCYnG](https://rzp.io/rzp/WhPCYnG) | **PASS** |
-| **TC-02** | One-Off | Card Gateway Technical Error (₹2,999) | `RETRY_LINK_NOW` (`RULE_HIGH_PROB_IMMEDIATE_RETRY`) | [https://rzp.io/rzp/4Szv8XS6](https://rzp.io/rzp/4Szv8XS6) | **PASS** |
-| **TC-03** | One-Off | Insufficient Funds (₹799) | `RETRY_LINK_DELAYED` (`RULE_LOW_PROB_DELAYED_NUDGE`) | *N/A (Delayed Outreach)* | **PASS** |
-| **TC-04** | One-Off | Expired Card (₹1,200) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (Compliance Hold)* | **PASS** |
-| **TC-05** | One-Off | Stolen Card Hard Decline (₹3,500) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (0 Auto-Retries)* | **PASS** |
-| **TC-06** | One-Off | Fraud Suspected (₹4,200) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (Risk Team Hold)* | **PASS** |
-| **TC-07** | One-Off | High Value Ceiling (₹28,500) | `ESCALATE_HUMAN` (`RULE_HIGH_AMOUNT_ESCALATION`) | *N/A (VIP Concierge)* | **PASS** |
-| **TC-08** | One-Off | Duplicate Failure in Cooldown | `STOP` (`RULE_COOLDOWN_ACTIVE`) | *N/A (Duplicate Suppressed)* | **PASS** |
-| **TC-09** | Subscription | 1st Mandate Failure - Transient (₹999/mo) | `SCHEDULE_RETRY_DAY_1` (`RULE_SUB_STAGE_1_RETRY`) | *N/A (Mandate T+24h)* | **PASS** |
-| **TC-10** | Subscription | 2nd Mandate Failure - Low Funds (₹1,499/mo) | `SCHEDULE_RETRY_DAY_3` (`RULE_SUB_STAGE_2_LIQUIDITY_BUFFER`) | *N/A (Mandate T+3d)* | **PASS** |
-| **TC-11** | Subscription | Expired Mandate Card | `SEND_UPDATE_PAYMENT_METHOD_LINK` (`RULE_SUB_INSTRUMENT_UPDATE_REQUIRED`) | [https://rzp.io/rzp/ZonMd4py](https://rzp.io/rzp/ZonMd4py) | **PASS** |
-| **TC-12** | Subscription | 3+ Mandate Failures | `CANCEL_SUBSCRIPTION_STOP` (`RULE_SUB_MAX_RETRIES_EXCEEDED`) | *N/A (Auto-Billing Halted)* | **PASS** |
+| **TC-01** | Payments | Transient UPI Timeout (₹1,499) | `RETRY_LINK_NOW` (`RULE_HIGH_PROB_IMMEDIATE_RETRY`) | Live Razorpay URL Dispatched | **PASS** |
+| **TC-02** | Payments | Card Gateway Technical Error (₹2,999) | `RETRY_LINK_NOW` (`RULE_HIGH_PROB_IMMEDIATE_RETRY`) | Live Razorpay URL Dispatched | **PASS** |
+| **TC-03** | Payments | Insufficient Funds (₹799) | `RETRY_LINK_DELAYED` (`RULE_LOW_PROB_DELAYED_NUDGE`) | *N/A (Delayed Outreach)* | **PASS** |
+| **TC-04** | Payments | Expired Card Instrument (₹1,200) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (Triage Queue)* | **PASS** |
+| **TC-05** | Payments | Compliance Hard Decline - Stolen Card (₹3,500) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (0 Auto-Retries)* | **PASS** |
+| **TC-06** | Payments | Compliance Hard Decline - Fraud Suspected (₹4,200) | `ESCALATE_HUMAN` (`RULE_HARD_DECLINE_COMPLIANCE`) | *N/A (Risk Hold)* | **PASS** |
+| **TC-07** | Payments | High Value Risk Ceiling (₹28,500) | `ESCALATE_HUMAN` (`RULE_HIGH_AMOUNT_ESCALATION`) | *N/A (VIP Concierge)* | **PASS** |
+| **TC-08** | Payments | Duplicate Failure in Cooldown | `STOP` (`RULE_COOLDOWN_ACTIVE`) | *N/A (Spam Suppressed)* | **PASS** |
+| **TC-09** | Subscriptions | 1st Mandate Failure - Transient (₹999/mo) | `SCHEDULE_RETRY_DAY_1` (`RULE_SUB_STAGE_1_RETRY`) | *N/A (Mandate T+24h)* | **PASS** |
+| **TC-10** | Subscriptions | 2nd Mandate Failure - Low Funds (₹1,499/mo) | `SCHEDULE_RETRY_DAY_3` (`RULE_SUB_STAGE_2_LIQUIDITY_BUFFER`) | *N/A (Mandate T+3d)* | **PASS** |
+| **TC-11** | Subscriptions | Expired Mandate Card | `SEND_UPDATE_PAYMENT_METHOD_LINK` (`RULE_SUB_INSTRUMENT_UPDATE_REQUIRED`) | Live Razorpay URL Dispatched | **PASS** |
+| **TC-12** | Subscriptions | 3+ Mandate Failures | `CANCEL_SUBSCRIPTION_STOP` (`RULE_SUB_MAX_RETRIES_EXCEEDED`) | *N/A (Auto-Billing Halted)* | **PASS** |
+| **TC-13** | Abandonment | High-Intent Drop-off at OTP Friction (₹3,499) | `NUDGE_NOW` (`RULE_ABANDON_HIGH_INTENT_STAGE1`) | Live Razorpay URL Dispatched | **PASS** |
+| **TC-14** | Abandonment | Low-Intent Window Shopping ($< ₹500$) | `STOP` (`RULE_ABANDON_LOW_INTENT`) | *N/A (Spam Suppressed)* | **PASS** |
+| **TC-15** | Abandonment | `order.paid` Webhook Clears Cart Session | `STOP` (`RULE_ABANDON_ALREADY_COMPLETED`) | *N/A (Outreach Cleared)* | **PASS** |
+| **TC-16** | Receivables | Overdue Invoice Day+3 Friendly Nudge (₹18,500) | `REMINDER_1` (`RULE_REC_STAGE1_FRIENDLY`) | Live Razorpay URL Dispatched | **PASS** |
+| **TC-17** | Receivables | Promise-to-Pay Active Hold | `STOP` (`RULE_REC_PROMISE_ACTIVE`) | *N/A (Dunning Paused)* | **PASS** |
+| **TC-18** | Triage | Operator Resolves Queued Ticket with Audit Log | `ESCALATION_RESOLVED` (`MANUAL_OPERATOR_RESOLUTION`) | *N/A (Audited)* | **PASS** |
 
 ---
 
-## 7. Failure Recovery & Debugging Log
+## 6. API Reference
 
-A complete running record of real-world bugs hit during engineering and how they were resolved is documented in [`DEBUGGING_LOG.md`](DEBUGGING_LOG.md):
-- **Windows `cp1252` Console Encoding:** Handled stdout Unicode glyph serialization issues by enforcing standard INR currency output.
-- **Pickle Namespace Deserialization:** Resolved `__main__` namespace binding issues in `FunctionTransformer` by refactoring pure DataFrame feature prep.
-- **Razorpay API Latency & Timeouts:** Implemented resilient 30-second client timeouts and per-scenario exception isolation.
-- **In-Memory Cooldown Verification:** Designed automated 2-step test cases to deterministically verify active cooldown suppressions.
-- **Audit Log Hash Chain Consistency:** Enforced strict string normalization in SHA-256 ledger computations across all serialized rows.
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/health` | `GET` | Health check and enabled agent capabilities |
+| `/webhook` | `POST` | Ingests Razorpay webhooks (`payment.failed`, `subscription.charged.failed`, `order.paid`) with HMAC signature verification and SQLite idempotency |
+| `/escalations` | `GET` | Lists queued human escalations (filterable by `?status=open` or `resolved`) |
+| `/escalations/{id}/resolve` | `POST` | Resolves an escalation ticket with operator notes and appends to the hash-chained audit log |
+| `/checkout/session` | `POST` | Registers or updates an active checkout cart session |
+| `/checkout/sweep` | `POST` | Triggers on-demand sweeper for abandoned checkout carts past the cutoff window |
+| `/invoices` | `POST` | Creates or syncs an overdue B2B invoice |
+| `/invoices/{id}` | `GET` | Inspects invoice status, dunning stage, and promise details |
+| `/invoices/{id}/promise` | `POST` | Registers a customer Promise-to-Pay date, pausing automated dunning |
+| `/invoices/{id}/pay` | `POST` | Marks an invoice as paid in full, terminating dunning sequences |
+| `/invoices/sweep` | `POST` | Triggers on-demand dunning sweep across active overdue invoices |
 
 ---
 
-## 8. How to Run & Verify (Instructions for Judges)
+## 7. How to Run & Verify (Instructions for Judges)
 
 ### 1. Prerequisites
 - Python 3.10+
 - Razorpay Test Mode API Keys (configured in `.env`)
 
-### 2. Setup Virtual Environment
+### 2. Setup Environment
 ```bash
-# Clone the repository
 git clone https://github.com/Parth-2701/Buildathon.git
 cd Buildathon
 
-# Create and activate virtual environment
 python -m venv venv
 # Windows:
 .\venv\Scripts\activate
 # Linux/macOS:
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Run Automated Test Suite (29 Tests)
+### 3. Run Automated Test Suite (63 Tests)
 ```bash
 python run_tests.py
 ```
 
-### 4. Run the 5,000-Transaction Comparative Benchmark
+### 4. Run Multi-Track Comparative Benchmark
 ```bash
 python evaluate.py
 ```
 
-### 5. Run Live Test Mode Validation (12 Live Test Cases + Hash Chain Verification)
+### 5. Run Live Test Mode Validation (18 Live Cases + Hash Chain Verification)
 ```bash
 python run_live_validation.py
 ```

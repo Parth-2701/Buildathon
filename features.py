@@ -1,42 +1,78 @@
 """
-features.py - Feature extraction and transaction history tracking.
+features.py - Feature extraction and durable transaction history tracking.
 Razorpay Buildathon Track 3: AI Revenue Recovery Agent
 """
 
 import time
+import json
 from typing import Dict, Any, Optional
 from constants import COOLDOWN_WINDOW_SECONDS
+from db import get_db, init_db
 
 
 class TransactionTracker:
     """
-    Thread-safe / in-memory tracker for transaction attempts, cooldowns, and prior failures.
-    Tracks state by transaction or order ID.
+    Durable SQLite-backed tracker for transaction attempts, cooldowns, and prior failures.
+    Persists across process restarts and webhook bursts using WAL mode.
     """
 
-    def __init__(self):
-        # key -> {"failure_count": int, "action_history": list, "last_action_timestamp": float}
-        self._history: Dict[str, Dict[str, Any]] = {}
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path
+        init_db(self.db_path)
 
     def get_record(self, key: str) -> Dict[str, Any]:
-        if key not in self._history:
-            self._history[key] = {
-                "failure_count": 0,
-                "action_history": [],
-                "last_action_timestamp": None,
+        with get_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT failure_count, last_action, last_action_ts, action_history_json "
+                "FROM transaction_state WHERE tracking_key = ?",
+                (key,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "failure_count": 0,
+                    "action_history": [],
+                    "last_action_timestamp": None,
+                }
+            return {
+                "failure_count": row["failure_count"],
+                "action_history": json.loads(row["action_history_json"] or "[]"),
+                "last_action_timestamp": row["last_action_ts"],
             }
-        return self._history[key]
 
     def record_failure(self, key: str) -> int:
-        record = self.get_record(key)
-        record["failure_count"] += 1
-        return record["failure_count"]
+        with get_db(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO transaction_state (tracking_key, failure_count, action_history_json)
+                VALUES (?, 1, '[]')
+                ON CONFLICT(tracking_key) DO UPDATE SET failure_count = failure_count + 1
+            """, (key,))
+            row = conn.execute(
+                "SELECT failure_count FROM transaction_state WHERE tracking_key = ?",
+                (key,),
+            ).fetchone()
+            return row["failure_count"] if row else 1
 
     def record_action(self, key: str, action: str, timestamp: Optional[float] = None) -> None:
         ts = timestamp if timestamp is not None else time.time()
-        record = self.get_record(key)
-        record["action_history"].append({"action": action, "timestamp": ts})
-        record["last_action_timestamp"] = ts
+        with get_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT action_history_json FROM transaction_state WHERE tracking_key = ?",
+                (key,),
+            ).fetchone()
+            if row:
+                history = json.loads(row["action_history_json"] or "[]")
+                history.append({"action": action, "timestamp": ts})
+                conn.execute("""
+                    UPDATE transaction_state
+                    SET last_action = ?, last_action_ts = ?, action_history_json = ?
+                    WHERE tracking_key = ?
+                """, (action, ts, json.dumps(history), key))
+            else:
+                history = [{"action": action, "timestamp": ts}]
+                conn.execute("""
+                    INSERT INTO transaction_state (tracking_key, failure_count, last_action, last_action_ts, action_history_json)
+                    VALUES (?, 0, ?, ?, ?)
+                """, (key, action, ts, json.dumps(history)))
 
     def get_prior_failures(self, key: str) -> int:
         return self.get_record(key)["failure_count"]
@@ -55,11 +91,12 @@ class TransactionTracker:
         return elapsed < cooldown_seconds
 
     def reset(self) -> None:
-        """Clear history (useful for tests)."""
-        self._history.clear()
+        """Clear all transaction states (useful for tests)."""
+        with get_db(self.db_path) as conn:
+            conn.execute("DELETE FROM transaction_state")
 
 
-# Global in-memory tracker instance
+# Global tracker instance backed by recovery_state.db
 global_tracker = TransactionTracker()
 
 
@@ -89,7 +126,7 @@ def build_features(
 
     txn_id = payment_entity.get("id", "")
     order_id = payment_entity.get("order_id")
-    # Group by subscription_id / order_id / txn_id
+    # Group by custom_tracking_key (e.g. subscription_id) / order_id / txn_id
     tracking_key = custom_tracking_key or order_id or txn_id
 
     # Retrieve prior failures BEFORE recording this new failure
@@ -109,7 +146,6 @@ def build_features(
     customer_email = payment_entity.get("email")
     customer_contact = payment_entity.get("contact")
 
-    # Card / VPA metadata if present
     card_info = payment_entity.get("card") or {}
     card_network = card_info.get("network")
     card_type = card_info.get("type")
