@@ -64,6 +64,12 @@ An autonomous, compliance-first AI revenue recovery platform designed to elimina
 └────────────────────────┘  └────────────────────────┘  └────────────────────────┘
 ```
 
+### 2.1 Resilient Tiered Link Generation & Sandbox Quota Handling
+To prevent demo disruptions from Razorpay's Test Mode sandbox quota (which caps standard `payment_links` at 30 per unactivated account), [`executor.py`](executor.py) implements an intelligent 3-tier execution strategy:
+1. **Tier 1 (Direct Payment Link):** Attempts `_client.payment_link.create()` first for native `https://rzp.io/...` links.
+2. **Tier 2 (Real Razorpay-Hosted Link via Invoices API):** If Razorpay returns `limit of 30 reached`, it immediately generates an official Razorpay-hosted link via `_client.invoice.create({'type': 'invoice', ...})`, producing an active, unexpired `https://rzp.io/...` payment page with zero quota constraints.
+3. **Tier 3 (Interactive Checkout Modal):** Fallback interactive checkout page at `http://localhost:5000/pay/{order_id}` powered by official `checkout.js`, allowing full live payment simulations.
+
 ---
 
 ## 3. AI Judgment: Strict Separation of Concerns
@@ -74,6 +80,7 @@ An autonomous, compliance-first AI revenue recovery platform designed to elimina
 | **Fraud & Stolen Instrument Handling** | Hard Deterministic Rules | Regulatory compliance, card network rules, and chargeback prevention permit zero probabilistic error. |
 | **High Amount Escalation** | Hard Deterministic Rules | Financial exposure ceilings cannot rely on model confidence. |
 | **Recovery Probability & Timing** | **Calibrated ML Model** (`HistGradientBoosting` + Isotonic) | Evaluates non-linear interactions (amount elasticity, error code, payment method, retry decay) to classify recovery likelihood on soft declines. |
+| **Action Execution & Link Dispatch** | **Tiered Razorpay Dispatcher** (`executor.py`) | Tries native Razorpay Payment Links first; automatically fails over to real hosted `rzp.io` Invoice links on sandbox quota exhaustion to guarantee live, testable links. |
 | **Root-Cause Diagnosis & Customer Copy** | **LLM Diagnostics Layer** (`llm_diagnostics.py`) | **Strictly read-only & explanatory.** The LLM *never* selects an action, never alters amounts, and never moves money. It produces natural language internal explanations and personalized customer messaging. |
 | **Actionable Human Triage** | **SQLite Queue + REST API** (`escalation.py`) | Persists escalated items in SQLite with full context, supports outbound notifications (Slack), and exposes operator resolution endpoints. |
 | **Tamper-Evident Audit Ledger** | **Cryptographic Hash Chain** (`SHA-256`) | Every audit entry is cryptographically linked to the previous row's hash (`entry_hash = SHA256(prev_hash + row_data)`), making retroactive tampering mathematically impossible. |
@@ -136,6 +143,7 @@ An autonomous, compliance-first AI revenue recovery platform designed to elimina
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/health` | `GET` | Health check and enabled agent capabilities |
+| `/pay/{order_id}` | `GET` | Interactive Razorpay Checkout modal page powered by real Razorpay Orders (`checkout.js`), ensuring test payments can be simulated live in browser |
 | `/webhook` | `POST` | Ingests Razorpay webhooks (`payment.failed`, `subscription.charged.failed`, `order.paid`) with HMAC signature verification and SQLite idempotency |
 | `/escalations` | `GET` | Lists queued human escalations (filterable by `?status=open` or `resolved`) |
 | `/escalations/{id}/resolve` | `POST` | Resolves an escalation ticket with operator notes and appends to the hash-chained audit log |

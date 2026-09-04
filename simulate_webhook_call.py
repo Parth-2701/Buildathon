@@ -94,16 +94,23 @@ from dotenv import load_dotenv
 load_dotenv()
 webhook_secret = os.getenv("WEBHOOK_SECRET")
 
+import time
+
 for scenario in scenarios:
+    ts = int(time.time() * 1000)
+    entity = dict(scenario["entity"])
+    entity["id"] = f"{scenario['entity']['id']}_{ts}"
+
     print(f"\n>> {scenario['name']}")
     webhook_payload = {
+        "id": f"evt_sim_{ts}_{scenario['entity']['id']}",
         "entity": "event",
         "account_id": "acc_buildathon_demo",
         "event": "payment.failed",
         "contains": ["payment"],
         "payload": {
             "payment": {
-                "entity": scenario["entity"]
+                "entity": entity
             }
         },
     }
